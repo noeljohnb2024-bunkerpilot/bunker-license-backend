@@ -1,0 +1,16 @@
+{
+  "name": "bunker-license-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "License-code server for the Bunker Pilot app",
+  "main": "server.js",
+  "type": "commonjs",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test.js"
+  },
+  "dependencies": {
+    "pg": "^8.11.3"
+  }
+}

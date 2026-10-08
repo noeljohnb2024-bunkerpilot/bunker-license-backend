@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Bunker Pilot — License admin</title>
+<style>
+:root{--ink:#1a070d;--surface:#2b0f1a;--surface2:#371526;--line:#5c2a3a;--text:#fdf3ee;--muted:#d7b2bc;--gold:#ffc23a;--good:#45d69b;--danger:#ff6b7d;--warn:#ff9a3c}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(circle at 50% 0,#371526,#12060a 70%) fixed;color:var(--text);font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;min-height:100vh}
+.wrap{max-width:980px;margin:0 auto;padding:18px 14px 60px}
+h1{font-size:20px;margin:0 0 4px;color:var(--gold)} .sub{color:var(--muted);margin:0 0 18px;font-size:13px}
+.card{background:rgba(43,15,26,.8);border:1px solid rgba(255,194,58,.3);border-radius:14px;padding:16px;margin-bottom:16px}
+label{display:block;font-size:13px;color:var(--muted);margin-bottom:6px}
+input{width:100%;padding:11px 12px;border-radius:10px;border:1px solid var(--line);background:#230b14;color:var(--text);font-size:15px}
+input:focus{outline:2px solid rgba(255,194,58,.55);border-color:var(--gold)}
+button{cursor:pointer;border:0;border-radius:10px;padding:10px 14px;font-size:14px;font-weight:600;background:linear-gradient(#ffd66b,#ffb81c);color:#2a1300}
+button.ghost{background:transparent;color:var(--text);border:1px solid var(--line)}
+button.danger{background:transparent;color:var(--danger);border:1px solid var(--danger)}
+button:disabled{opacity:.5;cursor:default}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}.row>.grow{flex:1;min-width:200px}
+.msg{margin-top:10px;font-size:13px;min-height:18px}.msg.err{color:var(--danger)}.msg.ok{color:var(--good)}
+.newcode{display:none;margin-top:14px;padding:14px;border-radius:12px;background:#230b14;border:1px dashed var(--gold);text-align:center}
+.newcode .code{font:700 26px/1.2 ui-monospace,Consolas,monospace;letter-spacing:2px;color:var(--gold);word-break:break-all}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{padding:9px 8px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+td.code{font:600 13px ui-monospace,Consolas,monospace;white-space:nowrap}
+.tag{display:inline-block;padding:2px 8px;border-radius:99px;font-size:12px;font-weight:600}
+.t-unused{background:rgba(215,178,188,.18);color:var(--muted)}.t-used{background:rgba(69,214,155,.18);color:var(--good)}.t-revoked{background:rgba(255,107,125,.2);color:var(--danger)}
+.acts{display:flex;gap:6px;flex-wrap:wrap}.acts button{padding:6px 9px;font-size:12px}
+.scroll{overflow-x:auto}.muted{color:var(--muted)}.hide{display:none}
+.top{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.stats{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--muted);margin:2px 0 12px}.stats b{color:var(--text)}
+.backup-status{display:inline-block;margin-bottom:12px;padding:6px 10px;border-radius:8px;font-size:13px;font-weight:600}
+.bs-ok{background:rgba(69,214,155,.15);color:var(--good)}.bs-warn{background:rgba(255,154,60,.18);color:var(--warn)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Bunker Pilot — License admin</h1>
+  <p class="sub">Private page. Never send this link to buyers.</p>
+
+  <div id="lock" class="card">
+    <label for="pw">Admin password</label>
+    <div class="row">
+      <div class="grow"><input id="pw" type="password" autocomplete="current-password" placeholder="The ADMIN_PASSWORD you set on Render"></div>
+      <button id="unlock">Unlock</button>
+    </div>
+    <div id="lockMsg" class="msg"></div>
+  </div>
+
+  <div id="panel" class="hide">
+    <div class="card">
+      <label for="note">Note for this code (e.g. the buyer's Facebook name)</label>
+      <div class="row">
+        <div class="grow"><input id="note" maxlength="200" placeholder="Juan Dela Cruz — FB"></div>
+        <button id="gen">Generate new code</button>
+      </div>
+      <div id="genMsg" class="msg"></div>
+      <div id="newcode" class="newcode">
+        <div class="muted" style="font-size:12px;margin-bottom:6px">New code (already copied)</div>
+        <div id="newcodeText" class="code"></div>
+        <div style="margin-top:10px"><button id="copyAgain" class="ghost">Copy again</button></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="top">
+        <strong>All codes</strong>
+        <div class="row"><input id="filter" placeholder="Search code or note…" style="width:220px"><button id="refresh" class="ghost">Refresh</button><button id="lockBtn" class="ghost">Lock</button></div>
+      </div>
+      <div id="stats" class="stats"></div>
+      <div id="listMsg" class="msg"></div>
+      <div class="scroll"><table>
+        <thead><tr><th>Code</th><th>Note</th><th>Status</th><th>Device</th><th>Activated</th><th>Last seen</th><th></th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table></div>
+    </div>
+
+    <div class="card" id="backupCard">
+      <strong>Backup &amp; restore</strong>
+      <p class="muted" style="margin:6px 0 12px;font-size:13px">The free database has no automatic backups. Download a copy after every few sales and once a week. Keep the file private: it contains every code and device.</p>
+      <div id="backupStatus" class="backup-status"></div>
+      <div class="row">
+        <button id="dlBackup">Download backup (CSV)</button>
+        <button id="restoreBtn" class="ghost">Restore from backup…</button>
+        <input id="restoreFile" type="file" accept=".csv,text/csv,text/plain" class="hide">
+      </div>
+      <div id="backupMsg" class="msg"></div>
+      <p class="muted" style="margin:8px 0 0;font-size:12px">Restore only <b>adds codes that are missing</b>. Codes already in the database are never changed, so it is safe to run twice. Don't open and re-save the CSV in Excel before restoring.</p>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  var $=function(id){return document.getElementById(id)};
+  var pw='';var licenses=[];
+  try{pw=sessionStorage.getItem('bp-admin-pw')||''}catch(e){}
+
+  function api(action,body){
+    return fetch('/api/admin/'+action,{method:'POST',headers:{'Content-Type':'application/json','x-admin-password':pw},body:JSON.stringify(body||{})})
+      .then(function(r){return r.json().catch(function(){return{ok:false,reason:'server_error'}}).then(function(j){j.status=r.status;return j})})
+      .catch(function(){return{ok:false,reason:'network'}});
+  }
+  function say(el,text,cls){el.textContent=text||'';el.className='msg'+(cls?' '+cls:'')}
+  function reasonText(j){
+    if(j.reason==='bad_password')return 'Wrong password.';
+    if(j.reason==='too_many_attempts')return 'Too many wrong tries. Wait 15 minutes.';
+    if(j.reason==='network')return 'Cannot reach the server. If it was asleep, wait a minute and try again.';
+    return 'Something went wrong ('+(j.reason||j.status)+').';
+  }
+  function fmt(d){if(!d)return '—';var x=new Date(d);return isNaN(x)?'—':x.toLocaleString([], {year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}
+  function copy(text){
+    if(navigator.clipboard&&navigator.clipboard.writeText){return navigator.clipboard.writeText(text).then(function(){return true},function(){return false})}
+    return Promise.resolve(false);
+  }
+
+  function showPanel(on){$('lock').classList.toggle('hide',on);$('panel').classList.toggle('hide',!on)}
+
+  function unlock(){
+    pw=$('pw').value||pw;
+    if(!pw){say($('lockMsg'),'Enter your password.','err');return}
+    $('unlock').disabled=true;say($('lockMsg'),'Checking… (the server may take up to a minute to wake up)');
+    api('check').then(function(j){
+      $('unlock').disabled=false;
+      if(j.ok){try{sessionStorage.setItem('bp-admin-pw',pw)}catch(e){}$('pw').value='';say($('lockMsg'),'');showPanel(true);load()}
+      else{pw='';say($('lockMsg'),reasonText(j),'err')}
+    });
+  }
+
+  function load(){
+    say($('listMsg'),'Loading…');
+    api('list').then(function(j){
+      if(!j.ok){say($('listMsg'),reasonText(j),'err');if(j.status===401)lock();return}
+      licenses=j.licenses;say($('listMsg'),'');render();
+    });
+  }
+
+  function statusOf(l){return l.status==='revoked'?'revoked':(l.bound?'used':'unused')}
+
+  function render(){
+    var q=($('filter').value||'').trim().toLowerCase();
+    var tb=$('rows');tb.textContent='';
+    var n={unused:0,used:0,revoked:0};
+    licenses.forEach(function(l){n[statusOf(l)]++});
+    $('stats').innerHTML='';
+    [['Total',licenses.length],['Unused',n.unused],['Activated',n.used],['Revoked',n.revoked]].forEach(function(p){
+      var s=document.createElement('span');var b=document.createElement('b');b.textContent=p[1];s.appendChild(document.createTextNode(p[0]+': '));s.appendChild(b);$('stats').appendChild(s)});
+    var shown=licenses.filter(function(l){return !q||l.code.toLowerCase().indexOf(q)>-1||(l.note||'').toLowerCase().indexOf(q)>-1});
+    if(!shown.length){var tr=document.createElement('tr');var td=document.createElement('td');td.colSpan=7;td.className='muted';td.textContent=licenses.length?'No match.':'No codes yet — generate your first one above.';tr.appendChild(td);tb.appendChild(tr);return}
+    shown.forEach(function(l){
+      var st=statusOf(l);var tr=document.createElement('tr');
+      function cell(t,cls){var td=document.createElement('td');if(cls)td.className=cls;td.textContent=t;tr.appendChild(td);return td}
+      cell(l.code,'code');cell(l.note||'—');
+      var tds=document.createElement('td');var tag=document.createElement('span');tag.className='tag t-'+st;tag.textContent={unused:'Not used yet',used:'Activated',revoked:'Revoked'}[st];tds.appendChild(tag);tr.appendChild(tds);
+      cell(l.bound?(l.device_label||'1 device'):'—');cell(fmt(l.activated_at));cell(fmt(l.last_seen_at));
+      var ta=document.createElement('td');var acts=document.createElement('div');acts.className='acts';
+      function btn(label,cls,fn){var b=document.createElement('button');b.textContent=label;if(cls)b.className=cls;b.addEventListener('click',fn);acts.appendChild(b)}
+      btn('Copy','ghost',function(){copy(l.code).then(function(ok){say($('listMsg'),ok?'Copied '+l.code:'Copy failed — select the code and copy it by hand.',ok?'ok':'err')})});
+      if(l.status==='active'){
+        if(l.bound)btn('Reset device','ghost',function(){act('reset-device',l,'Let '+l.code+' be activated on a NEW device? The current device will stop working.')});
+        btn('Revoke','danger',function(){act('revoke',l,'Revoke '+l.code+'? It stops working on the next online check.')});
+      }else{btn('Restore','ghost',function(){act('restore',l,'Restore '+l.code+'?')})}
+      ta.appendChild(acts);tr.appendChild(ta);tb.appendChild(tr);
+    });
+  }
+
+  function act(action,l,question){
+    if(!window.confirm(question))return;
+    api(action,{code:l.code}).then(function(j){
+      if(!j.ok){say($('listMsg'),reasonText(j),'err');return}
+      say($('listMsg'),'Done.','ok');load();
+    });
+  }
+
+  function generate(){
+    $('gen').disabled=true;say($('genMsg'),'Generating…');
+    api('generate',{note:$('note').value}).then(function(j){
+      $('gen').disabled=false;
+      if(!j.ok){say($('genMsg'),reasonText(j),'err');return}
+      var code=j.license.code;$('newcodeText').textContent=code;$('newcode').style.display='block';$('note').value='';
+      copy(code).then(function(ok){say($('genMsg'),ok?'Code created and copied to your clipboard.':'Code created. Copy it from the box below.','ok')});
+      load();
+    });
+  }
+
+  function lock(){pw='';try{sessionStorage.removeItem('bp-admin-pw')}catch(e){}showPanel(false);$('newcode').style.display='none';licenses=[];render()}
+
+  $('unlock').addEventListener('click',unlock);
+  $('pw').addEventListener('keydown',function(e){if(e.key==='Enter')unlock()});
+  $('gen').addEventListener('click',generate);
+  $('note').addEventListener('keydown',function(e){if(e.key==='Enter')generate()});
+  $('copyAgain').addEventListener('click',function(){copy($('newcodeText').textContent).then(function(ok){say($('genMsg'),ok?'Copied.':'Copy failed — select the code by hand.',ok?'ok':'err')})});
+  $('refresh').addEventListener('click',load);
+  $('lockBtn').addEventListener('click',lock);
+  $('filter').addEventListener('input',render);
+
+  /* ---------- backup & restore ---------- */
+  var BK='bp-last-backup';
+  function lastBackup(){try{var t=Date.parse(localStorage.getItem(BK)||'');return isNaN(t)?0:t}catch(e){return 0}}
+  function backupStatus(){
+    var el=$('backupStatus'),t=lastBackup();
+    if(!t){el.textContent='No backup downloaded from this computer yet.';el.className='backup-status bs-warn';return}
+    var d=Math.floor((Date.now()-t)/86400000);
+    el.textContent='Last backup from this computer: '+(d<1?'today':d===1?'yesterday':d+' days ago')+'.';
+    el.className='backup-status '+(d>7?'bs-warn':'bs-ok');
+  }
+  function csvCell(v){
+    var t=v==null?'':String(v);
+    if(/^[=+\-@\t\r]/.test(t))t="'"+t;
+    return '"'+t.replace(/"/g,'""')+'"';
+  }
+  var COLS=['code','note','status','device_id','device_label','created_at','activated_at','last_seen_at','revoked_at'];
+  function toCsv(rows){
+    var out=[COLS.join(',')];
+    rows.forEach(function(r){out.push(COLS.map(function(c){return csvCell(r[c])}).join(','))});
+    return '\ufeff'+out.join('\r\n')+'\r\n';
+  }
+  function parseCsv(text){
+    text=String(text).replace(/^\ufeff/,'');
+    var rows=[],row=[],cur='',q=false,i,c;
+    for(i=0;i<text.length;i++){
+      c=text[i];
+      if(q){
+        if(c==='"'){if(text[i+1]==='"'){cur+='"';i++}else q=false}else cur+=c;
+      }else if(c==='"')q=true;
+      else if(c===','){row.push(cur);cur=''}
+      else if(c==='\n'||c==='\r'){if(c==='\r'&&text[i+1]==='\n')i++;row.push(cur);cur='';rows.push(row);row=[]}
+      else cur+=c;
+    }
+    if(cur!==''||row.length){row.push(cur);rows.push(row)}
+    rows=rows.filter(function(r){return r.some(function(x){return String(x).trim()!==''})});
+    if(!rows.length)return {error:'The file is empty.'};
+    var head=rows[0].map(function(h){return String(h).trim().toLowerCase()});
+    if(head.indexOf('code')<0)return {error:'This does not look like a backup: there is no "code" column.'};
+    var out=rows.slice(1).map(function(r){var o={};head.forEach(function(h,k){if(COLS.indexOf(h)>-1)o[h]=r[k]==null?'':r[k]});return o});
+    return {rows:out};
+  }
+  function download(name,text){
+    var url=URL.createObjectURL(new Blob([text],{type:'text/csv;charset=utf-8'}));
+    var a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();
+    setTimeout(function(){URL.revokeObjectURL(url)},4000);
+  }
+  function dlBackup(){
+    $('dlBackup').disabled=true;say($('backupMsg'),'Preparing backup…');
+    api('export').then(function(j){
+      $('dlBackup').disabled=false;
+      if(!j.ok){say($('backupMsg'),reasonText(j),'err');return}
+      var d=new Date(),pad=function(n){return(n<10?'0':'')+n};
+      var name='bunker-licenses-backup-'+d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'.csv';
+      download(name,toCsv(j.licenses));
+      try{localStorage.setItem(BK,d.toISOString())}catch(e){}
+      backupStatus();
+      say($('backupMsg'),'Saved '+j.licenses.length+' code'+(j.licenses.length===1?'':'s')+' to '+name+' (check your Downloads folder). Keep it private.','ok');
+    });
+  }
+  function restoreFrom(file){
+    if(!file)return;
+    var fr=new FileReader();
+    fr.onerror=function(){say($('backupMsg'),'Could not read that file.','err')};
+    fr.onload=function(){
+      var p=parseCsv(fr.result);
+      if(p.error){say($('backupMsg'),p.error,'err');return}
+      if(!p.rows.length){say($('backupMsg'),'The file has no codes in it.','err');return}
+      if(!window.confirm('Found '+p.rows.length+' code'+(p.rows.length===1?'':'s')+' in this file.\n\nAdd the ones that are missing from the database? Codes already there are not changed.'))return;
+      $('restoreBtn').disabled=true;
+      var total={added:0,already:0,invalid:0,dups:0},examples=[],i=0,CH=500;
+      function next(){
+        if(i>=p.rows.length){
+          $('restoreBtn').disabled=false;
+          var m='Restore finished: '+total.added+' added, '+total.already+' already there'+(total.dups?', '+total.dups+' repeated in the file':'')+(total.invalid?', '+total.invalid+' skipped as invalid ('+examples.join('; ')+')':'')+'.';
+          say($('backupMsg'),m,total.invalid?'err':'ok');load();return;
+        }
+        say($('backupMsg'),'Restoring… '+Math.min(i+CH,p.rows.length)+' of '+p.rows.length+' (the server may need a minute to wake up)');
+        api('import',{rows:p.rows.slice(i,i+CH)}).then(function(j){
+          if(!j.ok){$('restoreBtn').disabled=false;say($('backupMsg'),'Stopped at row '+(i+1)+': '+reasonText(j)+(total.added?' ('+total.added+' already added — it is safe to run the restore again.)':''),'err');return}
+          total.added+=j.added;total.already+=j.already_there;total.invalid+=j.invalid;total.dups+=j.duplicates_in_file;
+          (j.invalid_examples||[]).forEach(function(e){if(examples.length<5)examples.push('row '+(i+e.row)+(e.code?' '+e.code:'')+': '+e.why)});
+          i+=CH;next();
+        });
+      }
+      next();
+    };
+    fr.readAsText(file);
+  }
+  $('dlBackup').addEventListener('click',dlBackup);
+  $('restoreBtn').addEventListener('click',function(){$('restoreFile').value='';$('restoreFile').click()});
+  $('restoreFile').addEventListener('change',function(){restoreFrom(this.files&&this.files[0])});
+  backupStatus();
+  if(pw){showPanel(true);load()}
+})();
+</script>
+</body>
+</html>
