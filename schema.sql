@@ -19,3 +19,17 @@ create table if not exists licenses (
 -- Turning on Row Level Security with no policies locks that door completely.
 -- Our Render server connects with the database password, which is not affected.
 alter table licenses enable row level security;
+
+-- ---- Gumroad automatic sales (safe to run again) ----
+-- One row per Gumroad sale. The sale id is unique, so the same sale can never create two codes.
+create table if not exists gumroad_sales (
+  sale_id      text primary key,
+  code         text,
+  email        text not null,
+  buyer_name   text not null default '',
+  created_at   timestamptz not null default now(),
+  emailed_at   timestamptz,
+  email_error  text,
+  refunded_at  timestamptz
+);
+alter table gumroad_sales enable row level security;

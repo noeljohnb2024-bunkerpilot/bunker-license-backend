@@ -2,7 +2,9 @@
 /* Bunker Pilot license server.
    Public API (used by the app):   POST /api/activate   POST /api/validate   GET /health
    Admin API (used by admin.html): POST /api/admin/generate | list | revoke | restore | reset-device | export | import
-   Admin calls need the header  x-admin-password: <ADMIN_PASSWORD>.            */
+   Admin calls need the header  x-admin-password: <ADMIN_PASSWORD>.
+   Gumroad (optional): POST /api/gumroad?token=<GUMROAD_TOKEN>  = Gumroad's "Ping" after each sale.
+   A sale creates a code and emails it to the buyer automatically.            */
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -94,9 +96,58 @@ function cleanImportRow(r) {
   return { row };
 }
 
-function createApp({ store, adminPassword, allowedOrigin = '*', publicDir }) {
+// ---- Gumroad helpers ----
+const MAX_PING_BODY = 50 * 1024;
+const EMAIL_RE = /^[^\s@<>"']+@[^\s@<>"']+\.[^\s@<>"']+$/;
+function productMatches(f, want) {
+  if (!want) return true;
+  const w = String(want).trim().toLowerCase();
+  return [f.product_permalink, f.permalink, f.product_id, f.short_product_id].filter(Boolean)
+    .map(x => String(x).trim().toLowerCase()).some(c => c === w || c.endsWith('/' + w));
+}
+// Passes a sale notice that belongs to another product (e.g. e-ORB Marine) on, unchanged, to that product's server.
+function makeRelay(url) {
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  return async function relay(raw, contentType) {
+    for (const wait of [0, 20000, 60000]) {
+      if (wait) await sleep(wait);
+      const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), 60000);
+      try {
+        const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': contentType }, body: raw, signal: ctl.signal });
+        if (r.ok) return true;
+        console.error('relay got HTTP', r.status);
+      } catch (e) { console.error('relay error:', e.message); }
+      finally { clearTimeout(timer); }
+    }
+    console.error('relay gave up');
+    return false;
+  };
+}
+
+// Reads the Render settings and builds the Gumroad config. Returns null when GUMROAD_TOKEN is not set.
+// Email goes by the free Gmail script if APPS_SCRIPT_URL is set, otherwise by Resend.
+function gumroadFromEnv(E, { relayFactory = makeRelay } = {}) {
+  if (!E.GUMROAD_TOKEN) return null;
+  if (E.GUMROAD_TOKEN.length < 16) throw new Error('GUMROAD_TOKEN must be at least 16 characters.');
+  const useScript = !!E.APPS_SCRIPT_URL;
+  const need = ['APP_URL'].concat(useScript ? ['APPS_SCRIPT_SECRET'] : ['RESEND_API_KEY', 'MAIL_FROM']);
+  const missing = need.filter(k => !E[k]);
+  if (missing.length) throw new Error('Gumroad is switched on but these settings are missing: ' + missing.join(', '));
+  if (useScript && !/^https:\/\/script\.google\.com\//.test(E.APPS_SCRIPT_URL)) throw new Error('APPS_SCRIPT_URL must start with https://script.google.com/');
+  const em = require('./email');
+  const mailer = useScript
+    ? em.makeAppsScriptMailer({ url: E.APPS_SCRIPT_URL, secret: E.APPS_SCRIPT_SECRET, fromName: E.MAIL_FROM_NAME || 'Bunker Pilot', replyTo: E.MAIL_REPLY_TO || '', appUrl: E.APP_URL, contact: E.SUPPORT_CONTACT || '' })
+    : em.makeMailer({ apiKey: E.RESEND_API_KEY, from: E.MAIL_FROM, replyTo: E.MAIL_REPLY_TO || '', appUrl: E.APP_URL, contact: E.SUPPORT_CONTACT || '' });
+  return {
+    token: E.GUMROAD_TOKEN, product: E.GUMROAD_PRODUCT || '', mailer, mailerName: useScript ? 'Gmail script' : 'Resend',
+    relay: E.GUMROAD_FORWARD_URL ? relayFactory(E.GUMROAD_FORWARD_URL) : null
+  };
+}
+
+function createApp({ store, adminPassword, allowedOrigin = '*', publicDir, gumroad }) {
   const codeFails = limiter(15, 15 * 60 * 1000);
   const adminFails = limiter(8, 15 * 60 * 1000);
+  const tokenFails = limiter(10, 15 * 60 * 1000);
 
   const cors = {
     'Access-Control-Allow-Origin': allowedOrigin,
@@ -156,6 +207,82 @@ function createApp({ store, adminPassword, allowedOrigin = '*', publicDir }) {
     if (row.device_id !== body.deviceId) return send(res, 403, { ok: false, reason: row.device_id ? 'used_on_other_device' : 'not_activated' });
     await store.touch(code);
     return send(res, 200, { ok: true });
+  }
+
+  function readRaw(req, limit) {
+    return new Promise((resolve, reject) => {
+      let size = 0; const chunks = [];
+      req.on('data', c => {
+        size += c.length;
+        if (size > limit) { reject(Object.assign(new Error('too_large'), { status: 413 })); req.destroy(); return; }
+        chunks.push(c);
+      });
+      req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+      req.on('error', reject);
+    });
+  }
+
+  // Gumroad "Ping": one POST per sale (form-encoded). Always answer 200 unless we want Gumroad to retry (it retries non-200).
+  async function handleGumroad(req, res, url) {
+    const ip = ipOf(req);
+    if (tokenFails.blocked(ip)) return send(res, 429, { ok: false, reason: 'too_many_attempts' });
+    if (!safeEqual(url.searchParams.get('token') || '', gumroad.token)) {
+      tokenFails.fail(ip);
+      return send(res, 401, { ok: false, reason: 'bad_token' });
+    }
+    const raw = await readRaw(req, MAX_PING_BODY);
+    const contentType = String(req.headers['content-type'] || 'application/x-www-form-urlencoded');
+    let f = {};
+    try {
+      if (/json/i.test(contentType)) f = JSON.parse(raw || '{}');
+      else for (const [k, v] of new URLSearchParams(raw)) f[k] = v;
+    } catch { return send(res, 400, { ok: false, reason: 'bad_body' }); }
+
+    if (!productMatches(f, gumroad.product)) {
+      if (gumroad.relay) { Promise.resolve(gumroad.relay(raw, contentType)).catch(e => console.error('relay failed:', e && e.message)); return send(res, 200, { ok: true, relayed: true }); }
+      return send(res, 200, { ok: true, ignored: 'other_product' });
+    }
+
+    const saleId = cleanText(f.sale_id, 120);
+    const email = cleanText(f.email, 200).toLowerCase();
+    if (!saleId) return send(res, 200, { ok: true, ignored: 'no_sale_id' });
+
+    if (String(f.refunded).toLowerCase() === 'true') {
+      const ex = await store.getSale(saleId);
+      if (ex) { if (ex.code) await store.revoke(ex.code); await store.markRefunded(saleId); }
+      return send(res, 200, { ok: true, refunded: !!ex });
+    }
+
+    if (!EMAIL_RE.test(email)) return send(res, 200, { ok: true, ignored: 'bad_email' });
+    const name = cleanText(f.full_name || f.purchaser_name || '', 120);
+    const note = cleanText(`Gumroad: ${name || 'buyer'} <${email}> #${saleId}`, 200);
+
+    async function newCode() {
+      for (let i = 0; i < 8; i++) { const row = await store.create(genCode(), note); if (row) return row.code; }
+      return null;
+    }
+    let code, claimed = await store.claimSale(saleId, email, name);
+    if (claimed) {
+      code = await newCode();
+      if (!code) return send(res, 500, { ok: false, reason: 'could_not_generate' });
+      await store.attachCode(saleId, code);
+    } else {
+      const ex = await store.getSale(saleId);
+      if (!ex) return send(res, 500, { ok: false, reason: 'server_error' });
+      if (ex.emailed_at) return send(res, 200, { ok: true, duplicate: true });
+      code = ex.code;
+      if (!code) { code = await newCode(); if (!code) return send(res, 500, { ok: false, reason: 'could_not_generate' }); await store.attachCode(saleId, code); }
+    }
+    try {
+      await gumroad.mailer.sendCode({ to: email, name, code });
+      await store.markEmailed(saleId);
+      await store.setNote(code, note);
+      return send(res, 200, { ok: true, emailed: true });
+    } catch (e) {
+      console.error('email failed for sale', saleId, e.message);
+      try { await store.markEmailFailed(saleId, e.message); await store.setNote(code, cleanText('EMAIL NOT SENT - send this code by hand. ' + note, 200)); } catch {}
+      return send(res, 500, { ok: false, reason: 'email_failed' }); // Gumroad will try again later
+    }
   }
 
   async function handleAdmin(req, res, action, body) {
@@ -233,6 +360,10 @@ function createApp({ store, adminPassword, allowedOrigin = '*', publicDir }) {
       }
       if (req.method === 'GET') return serveStatic(req, res, p);
       if (req.method !== 'POST') return send(res, 405, { ok: false, reason: 'method_not_allowed' });
+      if (p === '/api/gumroad') {
+        if (!gumroad) return send(res, 404, { ok: false, reason: 'not_found' });
+        return await handleGumroad(req, res, url);
+      }
       const body = await readJson(req, p === '/api/admin/import' ? MAX_IMPORT_BODY : MAX_BODY);
       if (p === '/api/activate') return await handleActivate(req, res, body);
       if (p === '/api/validate') return await handleValidate(req, res, body);
@@ -246,7 +377,7 @@ function createApp({ store, adminPassword, allowedOrigin = '*', publicDir }) {
   };
 }
 
-module.exports = { createApp, genCode, normCode, cleanImportRow };
+module.exports = { createApp, genCode, normCode, cleanImportRow, productMatches, gumroadFromEnv };
 
 if (require.main === module) {
   const { pgStore } = require('./store');
@@ -256,9 +387,17 @@ if (require.main === module) {
   if (!ADMIN_PASSWORD || ADMIN_PASSWORD.length < 8) {
     console.error('ADMIN_PASSWORD is missing or shorter than 8 characters.'); process.exit(1);
   }
+  // Gumroad automation is switched on only when GUMROAD_TOKEN is set.
+  let gumroad = null;
+  try { gumroad = gumroadFromEnv(process.env); }
+  catch (e) { console.error(e.message); process.exit(1); }
+  if (gumroad) {
+    if (!gumroad.product) console.warn('WARNING: GUMROAD_PRODUCT is not set - every product sold on this Gumroad account will create a Bunker Pilot code.');
+    console.log('Gumroad automation is ON (email by ' + gumroad.mailerName + ')' + (gumroad.relay ? ' (other products are passed on)' : ''));
+  }
   const app = createApp({
     store: pgStore(DATABASE_URL), adminPassword: ADMIN_PASSWORD,
-    allowedOrigin: ALLOWED_ORIGIN || '*', publicDir: path.join(__dirname, 'public')
+    allowedOrigin: ALLOWED_ORIGIN || '*', publicDir: path.join(__dirname, 'public'), gumroad
   });
   http.createServer(app).listen(PORT, () => console.log(`Bunker license server listening on ${PORT}`));
 }

@@ -81,7 +81,18 @@ function pgStore(connectionString) {
          col('created_at'), col('activated_at'), col('last_seen_at'), col('revoked_at')]
       );
       return r.rowCount;
-    }
+    },
+    // ---- Gumroad sales (table gumroad_sales) ----
+    async claimSale(saleId, email, name) {
+      const r = await q('insert into gumroad_sales(sale_id,email,buyer_name) values($1,$2,$3) on conflict (sale_id) do nothing returning *', [saleId, email, name]);
+      return r.rows[0] || null; // null = this sale was already received
+    },
+    async getSale(saleId) { const r = await q('select * from gumroad_sales where sale_id=$1', [saleId]); return r.rows[0] || null; },
+    async attachCode(saleId, code) { await q('update gumroad_sales set code=$2 where sale_id=$1', [saleId, code]); },
+    async markEmailed(saleId) { await q('update gumroad_sales set emailed_at=now(), email_error=null where sale_id=$1', [saleId]); },
+    async markEmailFailed(saleId, err) { await q('update gumroad_sales set email_error=$2 where sale_id=$1', [saleId, String(err).slice(0, 500)]); },
+    async markRefunded(saleId) { await q('update gumroad_sales set refunded_at=now() where sale_id=$1', [saleId]); },
+    async setNote(code, note) { await q('update licenses set note=$2 where code=$1', [code, note]); }
   };
 }
 
