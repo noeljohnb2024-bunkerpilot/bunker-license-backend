@@ -1,0 +1,35 @@
+
+name: BunkerPilot Supabase Keep Alive
+
+on:
+  schedule:
+    # 8 AM, 4 PM and midnight Philippine time
+    - cron: '0 0,8,16 * * *'
+
+  # Allow manual testing
+  workflow_dispatch:
+
+jobs:
+  keep-alive:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check Supabase database
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+
+        run: |
+          set -e
+
+          echo "Checking BunkerPilot Supabase..."
+
+          curl --silent --show-error --fail-with-body \
+            --request POST \
+            --url "$SUPABASE_URL/rest/v1/rpc/keep_alive" \
+            --header "apikey: $SUPABASE_KEY" \
+            --header "Content-Type: application/json" \
+            --data '{}'
+
+          echo ""
+          echo "BunkerPilot database check successful!"
